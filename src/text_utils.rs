@@ -604,12 +604,81 @@ pub(crate) fn fix_visual_order_rtl(items: &mut [TextItem], candidates: &[usize],
     // Ties — including the vote-less single-run case — reverse: RTL text
     // painted with forward advances renders correctly only when stored in
     // visual order, so visual storage is the dominant convention.
-    if leftward > rightward {
+    //
+    // A leftward verdict is trusted only when the text it produces is
+    // orthographically possible. Emission direction and intra-run character
+    // order are independent: a producer can walk runs right-to-left (leftward
+    // evidence) and still store each run's characters visually, and for that
+    // class the geometric verdict is simply wrong. Hebrew final forms make
+    // the mistake detectable with certainty, so they get the last word.
+    if leftward > rightward && !stored_visually_by_orthography(items, candidates) {
         return;
     }
     for &idx in candidates {
         items[idx].text = reverse_visual_arabic(&items[idx].text);
     }
+}
+
+/// Hebrew letters that may appear only at the end of a word.
+fn is_hebrew_final_form(c: char) -> bool {
+    matches!(
+        c,
+        '\u{05DA}' | '\u{05DD}' | '\u{05DF}' | '\u{05E3}' | '\u{05E5}'
+    )
+}
+
+fn is_hebrew_letter(c: char) -> bool {
+    ('\u{05D0}'..='\u{05EA}').contains(&c)
+}
+
+/// Decide, from Hebrew orthography alone, that candidate runs hold visual-order
+/// text despite a leftward geometric verdict.
+///
+/// A word-initial final form (`ך ם ן ף ץ`) cannot occur in Hebrew, so it is
+/// proof of reversal rather than a heuristic preference — reversing a word that
+/// ends in one is exactly what puts it in front.
+///
+/// The test compares where the final forms sit rather than how many there are:
+/// correct Hebrew puts every one of them word-*terminally* and none
+/// word-initially, and reversal swaps the two counts. That makes the decision
+/// scale-free — no rate to tune, and no assumption about how often these
+/// letters occur in a given text — and it stays firmly one-sided: a correct
+/// logical-order producer (an OCR text layer, say) scores zero initial against
+/// a large terminal count and is never touched.
+fn stored_visually_by_orthography(items: &[TextItem], candidates: &[usize]) -> bool {
+    const MIN_WORDS: usize = 8;
+
+    let mut words = 0usize;
+    let mut initial = 0usize;
+    let mut terminal = 0usize;
+    for &idx in candidates {
+        let mut first = None;
+        let mut last = None;
+        let mut len = 0usize;
+        for c in items[idx].text.chars().chain(std::iter::once(' ')) {
+            if is_hebrew_letter(c) {
+                first = first.or(Some(c));
+                last = Some(c);
+                len += 1;
+                continue;
+            }
+            // Word boundary: score the run that just ended.
+            if len >= 2 {
+                words += 1;
+                if first.is_some_and(is_hebrew_final_form) {
+                    initial += 1;
+                }
+                if last.is_some_and(is_hebrew_final_form) {
+                    terminal += 1;
+                }
+            }
+            first = None;
+            last = None;
+            len = 0;
+        }
+    }
+
+    words >= MIN_WORDS && initial > terminal
 }
 
 /// Decode a PDF text string (ActualText, etc.) that may be UTF-16BE (BOM \xFE\xFF)
@@ -1371,6 +1440,67 @@ mod tests {
             reverse_visual_arabic(visual),
             "3.14 \u{05E9}\u{05DC}\u{05D5}\u{05DD}" // 3.14 שלום
         );
+    }
+
+    /// Nine Hebrew words that all end in a final form (ך ם ן ף ץ) — enough to
+    /// clear the minimum sample, and the pattern reversal inverts.
+    const FINAL_FORM_WORDS: [&str; 9] = [
+        "\u{05E9}\u{05DC}\u{05D5}\u{05DD}",                 // שלום
+        "\u{05E1}\u{05E4}\u{05E8}\u{05D9}\u{05DD}",         // ספרים
+        "\u{05EA}\u{05DB}\u{05E0}\u{05D5}\u{05DF}",         // תכנון
+        "\u{05DE}\u{05D1}\u{05E0}\u{05D9}\u{05DD}",         // מבנים
+        "\u{05E7}\u{05D5}\u{05D1}\u{05E5}",                 // קובץ
+        "\u{05D3}\u{05D2}\u{05E9}\u{05D9}\u{05DD}",         // דגשים
+        "\u{05D0}\u{05DC}\u{05D5}\u{05E0}\u{05D9}\u{05DD}", // אלונים
+        "\u{05D6}\u{05DE}\u{05DF}",                         // זמן
+        "\u{05D7}\u{05DC}\u{05D5}\u{05DF}",                 // חלון
+    ];
+
+    /// Lay the words out on one baseline with x *decreasing* in emission
+    /// order, so the geometric vote reads leftward — the "logical storage"
+    /// verdict this override has to second-guess.
+    fn leftward_emitted(texts: &[String]) -> (Vec<TextItem>, Vec<usize>) {
+        let items: Vec<TextItem> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| make_rtl_item(t, 100.0 - i as f32 * 10.0, 700.0))
+            .collect();
+        let candidates = (0..items.len()).collect();
+        (items, candidates)
+    }
+
+    #[test]
+    fn orthography_overrides_a_wrong_leftward_verdict() {
+        // Runs emitted right-to-left but each stored in visual order — the
+        // producer class the geometric verdict alone gets wrong. Reversal
+        // parks every final form word-initially, which Hebrew forbids, so
+        // the override fires and restores logical order.
+        let visual: Vec<String> = FINAL_FORM_WORDS
+            .iter()
+            .map(|w| w.chars().rev().collect())
+            .collect();
+        let (mut items, candidates) = leftward_emitted(&visual);
+
+        fix_visual_order_rtl(&mut items, &candidates, 0);
+
+        for (item, want) in items.iter().zip(FINAL_FORM_WORDS.iter()) {
+            assert_eq!(&item.text, want, "visual-order text must be restored");
+        }
+    }
+
+    #[test]
+    fn orthography_leaves_a_correct_leftward_verdict_alone() {
+        // The same leftward geometry, but the text is already logical: final
+        // forms sit word-terminally, so the override must not fire. This is
+        // the OCR-text-layer case — reversing it would corrupt good output.
+        let logical: Vec<String> = FINAL_FORM_WORDS.iter().map(|w| w.to_string()).collect();
+        let (mut items, candidates) = leftward_emitted(&logical);
+
+        fix_visual_order_rtl(&mut items, &candidates, 0);
+
+        for (item, want) in items.iter().zip(FINAL_FORM_WORDS.iter()) {
+            assert_eq!(&item.text, want, "logical text must survive untouched");
+        }
     }
 
     #[test]
