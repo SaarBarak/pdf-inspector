@@ -441,8 +441,21 @@ fn reverse_visual_arabic(text: &str) -> String {
     let mut runs: Vec<(bool, String)> = Vec::new(); // (is_ltr, content)
 
     let is_ltr_punct = |chars: &[char], i: usize| {
-        (chars[i].is_ascii_punctuation() || is_arabic_numeric_separator(chars[i]))
-            && is_adjacent_to_alnum(chars, i)
+        let c = chars[i];
+        if !(c.is_ascii_punctuation() || is_arabic_numeric_separator(c)) {
+            return false;
+        }
+        // A number separator joins the forward-ordered run only when digits
+        // flank it on both sides (UAX #9 W4/W5). With a number on one side
+        // only it is a neutral that resolves to the paragraph direction
+        // (N1/N2) and belongs to the RTL flow — absorbing it into the LTR run
+        // pins it to the visual side of the digits, which turns a list marker
+        // `1.` into `.1` and `14,` into `,14`.
+        if is_number_separator(c) {
+            is_between_alnum(chars, i)
+        } else {
+            is_adjacent_to_alnum(chars, i)
+        }
     };
     let mut i = 0;
     while i < chars.len() {
@@ -513,6 +526,22 @@ fn mirror_bracket(c: char) -> char {
 fn is_adjacent_to_alnum(chars: &[char], idx: usize) -> bool {
     (idx > 0 && is_forward_alnum(chars[idx - 1]))
         || (idx + 1 < chars.len() && is_forward_alnum(chars[idx + 1]))
+}
+
+/// Separators UAX #9 folds into a European number when digits flank them:
+/// European separators (W4) and common separators (W5). Brackets and the
+/// other neutrals are `ON` — never absorbed — so they keep the weaker
+/// adjacency rule and `(3)` still reads as one forward-ordered run.
+fn is_number_separator(c: char) -> bool {
+    matches!(c, '.' | ',' | ':' | '/' | '+' | '-') || is_arabic_numeric_separator(c)
+}
+
+/// Check that forward-ordered alphanumerics sit on *both* sides of `idx`.
+fn is_between_alnum(chars: &[char], idx: usize) -> bool {
+    idx > 0
+        && idx + 1 < chars.len()
+        && is_forward_alnum(chars[idx - 1])
+        && is_forward_alnum(chars[idx + 1])
 }
 
 /// A decoded show-op string qualifies for geometric visual-order RTL fixing
@@ -1310,6 +1339,50 @@ mod tests {
         // Decimal fragment with punctuation glued to digits stays intact
         let decimal = "\u{0663}\u{0665},\u{0660}"; // ٣٥,٠
         assert_eq!(reverse_visual_arabic(decimal), decimal);
+    }
+
+    #[test]
+    fn number_separator_on_one_side_only_stays_in_the_rtl_flow() {
+        // Visual storage of "1. שלום": the list marker's period is a neutral
+        // that resolved to the paragraph direction, so it sits to the *left*
+        // of the digit on screen. Absorbing it into the forward-ordered run
+        // would pin it there and emit ".1", which is not an ordered-list
+        // marker in Markdown.
+        let visual = "\u{05DD}\u{05D5}\u{05DC}\u{05E9} .1"; // םולש .1
+        assert_eq!(
+            reverse_visual_arabic(visual),
+            "1. \u{05E9}\u{05DC}\u{05D5}\u{05DD}" // 1. שלום
+        );
+
+        // Same rule on the other side: a trailing comma after a house number.
+        let visual = ",14 \u{05D4}\u{05D9}\u{05D9}\u{05D7}\u{05EA}\u{05D4}"; // ,14 היחתה
+        assert_eq!(
+            reverse_visual_arabic(visual),
+            "\u{05D4}\u{05EA}\u{05D7}\u{05D9}\u{05D9}\u{05D4} 14," // התחייה 14,
+        );
+    }
+
+    #[test]
+    fn number_separator_between_digits_stays_with_the_number() {
+        // UAX #9 W4/W5: flanked by digits, the separator is part of the
+        // number and the whole run keeps its left-to-right order.
+        let visual = "\u{05DD}\u{05D5}\u{05DC}\u{05E9} 3.14"; // םולש 3.14
+        assert_eq!(
+            reverse_visual_arabic(visual),
+            "3.14 \u{05E9}\u{05DC}\u{05D5}\u{05DD}" // 3.14 שלום
+        );
+    }
+
+    #[test]
+    fn brackets_around_a_digit_keep_the_adjacency_rule() {
+        // Brackets are ON — the W rules never fold them into a number, so
+        // they keep the weaker adjacency test and "(3)" stays one forward
+        // run rather than being split and mirrored.
+        let visual = "\u{05DD}\u{05D5}\u{05DC}\u{05E9} (3)"; // םולש (3)
+        assert_eq!(
+            reverse_visual_arabic(visual),
+            "(3) \u{05E9}\u{05DC}\u{05D5}\u{05DD}" // (3) שלום
+        );
     }
 
     fn make_rtl_item(text: &str, x: f32, y: f32) -> TextItem {
