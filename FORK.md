@@ -32,12 +32,30 @@ see "Updating" below — not something to treat as urgent or reactively chase.
 
 ## Branch
 
-`rtl-fix` is the one long-lived branch — it accumulates every patch this
-fork carries. (Renamed from `fix/rtl-upstream-1.17`, which itself
-superseded an earlier `fix/rtl-logical-order` — those version-bearing names
-are exactly what this rename is meant to stop happening. Don't create a new
-differently-named branch for the next patch; branch off `rtl-fix`, merge
-back into it, re-tag.)
+**`develop`** is the one long-lived branch — it accumulates every patch
+this fork carries, and releases are tagged directly off it (no separate
+release branch; `main` never receives these commits). Renamed from
+`rtl-fix`, which itself was renamed from `fix/rtl-upstream-1.17`, which
+superseded an earlier `fix/rtl-logical-order` (**not merged into this
+line at all** — a rebase makes new commits even for an identical fix, so
+that branch is a dead end, kept around only for history/its own tag).
+Those version-bearing names are exactly what this rename is meant to stop
+happening — `develop` describes the branch's role, not whichever patch
+came first.
+
+**Working on it, including in parallel with Saar:** never commit directly
+to `develop`. Cut a short-lived branch off it per patch, merge back via PR
+when it's done, then re-tag. `develop`'s tip is then always either fully
+done or not yet touched — never half-finished — which is what makes
+concurrent work by more than one person safe on a single branch.
+
+**`main` stays a plain, untouched mirror of upstream**, not a merge target.
+
+**When to introduce a second branch (a `main-fork` line):** only if either
+(a) a release needs to be cut while another patch is genuinely mid-flight
+and can't be merged or set aside, as a recurring situation, or (b) two
+deployments need to diverge onto separately-maintained patch sets. Neither
+applies today.
 
 ## Updating to a newer upstream base
 
@@ -46,7 +64,7 @@ new from upstream (this is exactly why we're touching it now: the OCR
 module landed in one of the 24 commits since our freeze point).
 
 1. Move `upstream-base` to the new upstream commit.
-2. Rebase `rtl-fix` onto it.
+2. Rebase `develop` onto it.
 3. Re-run `SysAgentsHarness`'s Hebrew/RTL suite
    (`tests/test_document_parser.py`) against the rebased build — that's the
    real regression gate; this repo's own test suite doesn't cover Hebrew.
@@ -54,6 +72,6 @@ module landed in one of the 24 commits since our freeze point).
 
 ## Adding a new patch
 
-Branch off `rtl-fix`, do the work, merge back in, re-tag. Same process as
+Branch off `develop`, do the work, merge back in, re-tag. Same process as
 above, just without the rebase-onto-a-new-base step if the current
 `upstream-base` still has everything you need.
