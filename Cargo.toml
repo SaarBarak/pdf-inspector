@@ -83,7 +83,12 @@ tempfile = "3.3"
 
 [features]
 default = []
-python = ["pyo3", "ocr"]
+# Bindings only. `ocr` stays opt-in here for the same reason it is opt-in
+# everywhere else: a consumer that just extracts text should not inherit
+# inference, a bundled renderer or HTTP/TLS. Adding it here costs 163 extra
+# crates (99 -> 262). Build `python-ocr` to get the native OCR path.
+python = ["pyo3"]
+python-ocr = ["python", "ocr"]
 vision = []
 model-cache = ["vision", "dep:dirs", "dep:fs2", "dep:sha2", "dep:windows-sys"]
 model-download = ["model-cache", "dep:ureq"]
