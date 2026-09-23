@@ -102,7 +102,19 @@ module landed in one of the 24 commits since our freeze point).
 3. Re-run `SysAgentsHarness`'s Hebrew/RTL suite
    (`tests/test_document_parser.py`) against the rebased build — that's the
    real regression gate; this repo's own test suite doesn't cover Hebrew.
-4. Tag the result `vX.Y.Z-rtl-fix.N`.
+4. Tag the result `vX.Y.Z-fork.N`, where `X.Y.Z` is the upstream base this
+   fork sits on and `N` counts this fork's releases against it.
+
+   **Why not `-rtl-fix.N` any more.** That name described the *first* patch,
+   not what a tag off `develop` actually is now — the branch was renamed
+   away from `rtl-fix` for exactly this reason (see Branch, above), and the
+   tags never followed. The RTL fix is permanently part of `develop`; every
+   tag carries it, so naming it in the tag says nothing. Patch 4 made the
+   mismatch obvious: it is a build change with no RTL content at all, and
+   `v1.17.0-rtl-fix.3` would have been actively misleading.
+
+   Existing `-rtl-fix.N` tags stay as they are — they are immutable history
+   and the `anydoc` fork pins one of them. Only new tags use `-fork.N`.
 
 ## Adding a new patch
 
