@@ -1,5 +1,5 @@
-# Cross-builds Python wheels for every RTL-fix tag and attaches them to that
-# tag's GitHub release.
+# Cross-builds Python wheels for every fork release tag and attaches them to
+# that tag's GitHub release.
 #
 # This is ours, not upstream's. `publish-pypi.yml` cannot be reused: it fires on
 # pushes to `main` and is guarded to `refs/heads/main`, and this fork's `main`
@@ -15,15 +15,15 @@
 #
 # The tag filter is deliberately narrow. Merges from upstream bring their
 # release tags along, and those must not trigger a fork build.
-name: RTL-fix wheels
+name: Fork wheels
 
 on:
   push:
-    tags: ['v*-rtl-fix.*']
+    tags: ['v*-fork.*']
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing RTL-fix tag to (re)build wheels for
+        description: Existing fork tag to (re)build wheels for
         required: true
 
 permissions:
