@@ -82,6 +82,17 @@ class TestProcessPdfBytes:
 # ---------------------------------------------------------------------------
 
 
+# These entry points exist only when the native OCR path is compiled in. The
+# default `python` feature is bindings-only, so a default wheel does not carry
+# them; `python-ocr` does. Skipping keeps this file valid against either build
+# rather than silently assuming the heavier one.
+requires_ocr = pytest.mark.skipif(
+    not hasattr(pdf_inspector, "process_pdf_with_ocr"),
+    reason="built without the `ocr` feature",
+)
+
+
+@requires_ocr
 class TestProcessPdfWithOcr:
     def test_off_mode_has_full_provenance_without_external_runtimes(self):
         result = pdf_inspector.process_pdf_with_ocr(
@@ -504,9 +515,15 @@ class TestErrors:
 class TestMultipleFixtures:
     """Run basic processing on all available test fixtures."""
 
+    # Encrypted fixtures need their password, which this sweep does not carry;
+    # `process_pdf` correctly refuses them. They have their own tests.
     @pytest.mark.parametrize(
         "filename",
-        [f for f in os.listdir(FIXTURES_DIR) if f.endswith(".pdf")],
+        [
+            f
+            for f in os.listdir(FIXTURES_DIR)
+            if f.endswith(".pdf") and not f.startswith("encrypted-")
+        ],
     )
     def test_process_all_fixtures(self, filename):
         result = pdf_inspector.process_pdf(fixture_path(filename))

@@ -1,0 +1,176 @@
+# Cross-builds Python wheels for every RTL-fix tag and attaches them to that
+# tag's GitHub release.
+#
+# This is ours, not upstream's. `publish-pypi.yml` cannot be reused: it fires on
+# pushes to `main` and is guarded to `refs/heads/main`, and this fork's `main`
+# is a plain mirror of upstream that never receives fork commits — so it can
+# never run here, which is correct. A fork must never publish to PyPI under the
+# upstream package name.
+#
+# Why this exists at all: the `anydoc` fork pins its *Python* dependency at this
+# repo (see FORK.md) so its Azure OCR path stops rebuilding documents through
+# unpatched upstream code and returning Hebrew character-reversed. Without
+# wheels, that pin means every consumer compiles this crate from source. With
+# them, it is an ordinary binary install.
+#
+# The tag filter is deliberately narrow. Merges from upstream bring their
+# release tags along, and those must not trigger a fork build.
+name: RTL-fix wheels
+
+on:
+  push:
+    tags: ['v*-rtl-fix.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing RTL-fix tag to (re)build wheels for
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  gate:
+    name: Fork patches are present
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      # Guards the one failure that is otherwise silent: an upstream merge drops
+      # this fork's RTL/CID commits, every build succeeds, and the wheels ship
+      # without the fix they exist to carry. These two modules are where those
+      # commits live, so their tests failing means the patch is gone.
+      - run: cargo test --lib text_utils
+      - run: cargo test --lib tounicode
+
+  build:
+    name: ${{ matrix.target }}
+    needs: gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # manylinux2014 == glibc 2.17, matching upstream's floor. aarch64
+          # builds natively on arm runners, so no QEMU is involved.
+          - target: x86_64-unknown-linux-gnu
+            host: ubuntu-latest
+            manylinux: '2014'
+          - target: aarch64-unknown-linux-gnu
+            host: ubuntu-24.04-arm
+            manylinux: '2014'
+          - target: x86_64-unknown-linux-musl
+            host: ubuntu-latest
+            manylinux: musllinux_1_2
+            musl: true
+          - target: aarch64-unknown-linux-musl
+            host: ubuntu-24.04-arm
+            manylinux: musllinux_1_2
+            musl: true
+          # No x86_64-apple-darwin: GitHub retired the `macos-13` Intel runners.
+          # Restore the target with whatever Intel label is available if one is
+          # needed.
+          - target: aarch64-apple-darwin
+            host: macos-14
+          - target: x86_64-pc-windows-msvc
+            host: windows-latest
+    runs-on: ${{ matrix.host }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-python@v6
+        if: runner.os != 'Linux'
+        with:
+          python-version: '3.13'
+      # The manifest is at the repo root here, not under python/ — this crate
+      # builds its own bindings. Features come from pyproject.toml's
+      # [tool.maturin], which selects `python`: bindings without the native OCR
+      # path (99 crates against 262). Do not add --features here; that would
+      # silently diverge the wheels from what a `pip install` of this ref builds.
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || '' }}
+          args: --release --locked --out dist
+          sccache: 'true'
+
+      # abi3-py38 means one wheel serves 3.8 through 3.14, so a single
+      # interpreter is enough to prove the artifact imports and extracts.
+      - name: Smoke test (native)
+        if: ${{ !matrix.musl }}
+        shell: bash
+        run: |
+          python -m pip install --no-index --find-links dist pdf-inspector
+          python -m pip install pytest
+          python -m pytest tests/test_python.py -q
+
+      # musl wheels cannot run on the glibc host, so they are exercised in an
+      # Alpine container of the same architecture.
+      - name: Smoke test (musl, in Alpine)
+        if: ${{ matrix.musl }}
+        run: |
+          docker run --rm -v "$PWD:/io" -w /io python:3.13-alpine sh -c "
+            python -m pip install --no-index --find-links dist pdf-inspector &&
+            python -m pip install pytest &&
+            python -m pytest tests/test_python.py -q"
+
+      # The wheels must stay bindings-only. If someone puts `ocr` back into the
+      # `python` feature, every consumer's install silently grows by 163 crates
+      # and the reason anydoc can afford this pin disappears. Cheap to assert,
+      # invisible if it regresses.
+      - name: Wheel is bindings-only
+        if: ${{ !matrix.musl }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pdf_inspector, sys
+          for api in ("extract_pages_markdown_bytes",
+                      "extract_text_with_positions_bytes",
+                      "process_pdf_bytes"):
+              assert hasattr(pdf_inspector, api), f"missing {api}"
+          if hasattr(pdf_inspector, "process_pdf_with_ocr"):
+              sys.exit("wheel carries the native OCR path; `python` should be bindings-only")
+          print("ok: extraction APIs present, OCR path absent")
+          PY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  publish:
+    name: Attach wheels to the release
+    needs: build
+    # Attach whatever built. A single unavailable runner class must not be able
+    # to withhold every other platform's wheel, which is what a plain `needs`
+    # does: one cancelled matrix job skips this whole job silently.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - name: Require at least one wheel
+        run: |
+          ls -la dist
+          if ! compgen -G 'dist/*.whl' >/dev/null; then
+            echo "::error::no wheels were produced by any target"
+            exit 1
+          fi
+      # The release usually already exists — the tag is cut by hand and the
+      # notes are written there. Create it only if it does not.
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 ||
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" dist/*.whl --clobber
