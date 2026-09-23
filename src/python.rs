@@ -465,6 +465,7 @@ fn to_py_err(e: crate::PdfError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
+#[cfg(feature = "ocr")]
 struct PythonOcrOptions {
     mode: String,
     page_numbers: Option<Vec<u32>>,
@@ -476,6 +477,7 @@ struct PythonOcrOptions {
     offline: bool,
 }
 
+#[cfg(feature = "ocr")]
 fn build_ocr_options(binding: PythonOcrOptions) -> PyResult<crate::vision::OcrPdfOptions> {
     let mode = match binding.mode.trim().to_ascii_lowercase().as_str() {
         "off" => crate::vision::OcrMode::Off,
@@ -507,6 +509,7 @@ fn build_ocr_options(binding: PythonOcrOptions) -> PyResult<crate::vision::OcrPd
     Ok(options)
 }
 
+#[cfg(feature = "ocr")]
 fn page_content_source_str(source: crate::vision::PageContentSource) -> String {
     match source {
         crate::vision::PageContentSource::Native => "native".into(),
@@ -515,6 +518,7 @@ fn page_content_source_str(source: crate::vision::PageContentSource) -> String {
     }
 }
 
+#[cfg(feature = "ocr")]
 fn to_py_ocr_result(result: crate::vision::OcrPdfResult) -> PyOcrPdfResult {
     PyOcrPdfResult {
         markdown: result.markdown,
@@ -706,6 +710,7 @@ fn process_pdf_bytes(data: &[u8], pages: Option<Vec<u32>>) -> PyResult<PyPdfResu
 /// OCR defaults to ``auto`` and only initializes its external runtime and
 /// model when native quality signals route at least one page. Page numbers
 /// are 1-indexed. The GIL is released for the complete processing call.
+#[cfg(feature = "ocr")]
 #[pyfunction]
 #[pyo3(signature = (
     path,
@@ -751,6 +756,7 @@ fn process_pdf_with_ocr(
 /// Process PDF bytes through native extraction and selective OCR.
 ///
 /// See [`process_pdf_with_ocr`] for options and result semantics.
+#[cfg(feature = "ocr")]
 #[pyfunction]
 #[pyo3(signature = (
     data,
@@ -1010,7 +1016,9 @@ fn pdf_inspector(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPagesExtractionResult>()?;
     m.add_function(wrap_pyfunction!(process_pdf, m)?)?;
     m.add_function(wrap_pyfunction!(process_pdf_bytes, m)?)?;
+    #[cfg(feature = "ocr")]
     m.add_function(wrap_pyfunction!(process_pdf_with_ocr, m)?)?;
+    #[cfg(feature = "ocr")]
     m.add_function(wrap_pyfunction!(process_pdf_with_ocr_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(detect_pdf, m)?)?;
     m.add_function(wrap_pyfunction!(detect_pdf_bytes, m)?)?;

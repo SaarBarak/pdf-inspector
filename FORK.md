@@ -29,6 +29,40 @@ see "Updating" below — not something to treat as urgent or reactively chase.
 3. `f5ff9f7` — fix(rtl): let Hebrew orthography overrule a wrong
    visual/logical verdict. Corrects cases where the reading-order heuristic
    picks the wrong direction for a Hebrew-heavy line.
+4. build: let the Python bindings build without the native OCR path.
+   `python` was `["pyo3", "ocr"]`, so every Python consumer compiled ONNX
+   runtime, a bundled PDFium and a TLS stack whether or not it OCRs
+   anything — 262 crates against 99. Now `python = ["pyo3"]`, with
+   `python-ocr` for the full path. Unlike items 1-3 this fixes nothing
+   about extraction; it exists so the `anydoc` fork can pin its *Python*
+   dependency here (see below) at a sane install cost.
+
+   **Upstreamable, and worth offering.** It follows upstream's own stated
+   intent — the `ocr` feature is commented there as opt-in precisely "so
+   default library, renderer-only, and browser consumers do not inherit
+   inference or HTTP/TLS", which the Python bindings were quietly
+   contradicting.
+
+## Why anydoc must pin this fork's *Python* package too
+
+`anydoc` consumes this repo twice: its Rust core links the crate (redirected
+by `[patch.crates-io]`), and its Python layer imports the Python package.
+Only the first was ever redirected — the second resolves `pdf-inspector`
+from PyPI, i.e. upstream, i.e. **without items 1-3**. So anydoc's Azure OCR
+path rebuilds documents through unpatched code and Hebrew comes back
+character-reversed, in the one fork that exists to stop exactly that.
+
+Measured on a real Hebrew document, same file, same page:
+
+| Path | Result |
+|---|---|
+| Rust core (this fork, via `[patch.crates-io]`) | `עיריית תל אביב` |
+| Python `pdf-inspector` 1.20.0 (PyPI upstream) | `ביבא לת תייריע` |
+
+Verified that pinning anydoc's Python dependency here fixes it through both
+APIs that code calls, `extract_pages_markdown_bytes` and
+`extract_text_with_positions_bytes`. Item 4 is what makes that pin
+affordable.
 
 ## Branch
 
