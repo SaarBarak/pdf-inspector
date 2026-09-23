@@ -29,13 +29,17 @@ see "Updating" below — not something to treat as urgent or reactively chase.
 3. `f5ff9f7` — fix(rtl): let Hebrew orthography overrule a wrong
    visual/logical verdict. Corrects cases where the reading-order heuristic
    picks the wrong direction for a Hebrew-heavy line.
-4. build: let the Python bindings build without the native OCR path.
-   `python` was `["pyo3", "ocr"]`, so every Python consumer compiled ONNX
-   runtime, a bundled PDFium and a TLS stack whether or not it OCRs
+4. `eac3181` — build: let the Python bindings build without the native OCR
+   path. `python` was `["pyo3", "ocr"]`, so every Python consumer compiled
+   ONNX runtime, a bundled PDFium and a TLS stack whether or not it OCRs
    anything — 262 crates against 99. Now `python = ["pyo3"]`, with
    `python-ocr` for the full path. Unlike items 1-3 this fixes nothing
    about extraction; it exists so the `anydoc` fork can pin its *Python*
-   dependency here (see below) at a sane install cost.
+   dependency here (see below) at a sane install cost. Tagged `v1.17.0-fork.1`
+   — verified the wheel `pip install`s and imports natively with no OCR
+   toolchain present, and that `extract_pages_markdown_bytes` /
+   `extract_text_with_positions_bytes` (the two calls anydoc's Azure
+   dispatch uses) still work.
 
    **Upstreamable, and worth offering.** It follows upstream's own stated
    intent — the `ocr` feature is commented there as opt-in precisely "so
@@ -63,6 +67,20 @@ Verified that pinning anydoc's Python dependency here fixes it through both
 APIs that code calls, `extract_pages_markdown_bytes` and
 `extract_text_with_positions_bytes`. Item 4 is what makes that pin
 affordable.
+
+## Tag naming
+
+Tags through `v1.17.0-rtl-fix.2` used the `-rtl-fix.N` suffix, named after
+this fork's first (and, at the time, only) patch. Item 4 above broke that:
+it's a build-feature split, not an RTL fix, so a tag called `rtl-fix.3`
+would misdescribe its own content — the same problem that got the branch
+renamed from `rtl-fix` to `develop` (see "Branch" below), one level down.
+
+**Tags from `v1.17.0-fork.1` on use `-fork.N`** — this fork's patch set,
+whatever it contains, numbered in the order tagged. Existing `-rtl-fix.N`
+tags are not renamed; they're referenced by name from `anydoc`'s own pin
+history and from git history generally, and a tag is exactly the kind of
+thing that should never move once published.
 
 ## Branch
 
